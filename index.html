@@ -16,23 +16,410 @@
 
     <!-- Your Firebase Config goes here -->
    <script type="module">
-  // Import the functions you need from the SDKs you need
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-  import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-analytics.js";
-  // TODO: Add SDKs for Firebase products that you want to use
-  // https://firebase.google.com/docs/web/setup#available-libraries
+  const { useState, useEffect, useMemo, useRef } = React;
 
-  // Your web app's Firebase configuration
-  // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-  const firebaseConfig = {
-    apiKey: "AIzaSyAb1mpDnwp73TnIzgDCqe2ELrd-A7IWfhY",
-    authDomain: "mtss-tracker-v1.firebaseapp.com",
-    projectId: "mtss-tracker-v1",
-    storageBucket: "mtss-tracker-v1.firebasestorage.app",
-    messagingSenderId: "563281455970",
-    appId: "1:563281455970:web:a8c687373aa0dfbe911a3b",
-    measurementId: "G-GDC3ZE7KE3"
+// --- Configuration ---
+// We use the global firebase object provided by the environment's script loads
+const firebaseConfig = JSON.parse(window.__firebase_config);
+
+// Initialize Firebase using the global 'firebase' object
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+
+const db = firebase.firestore();
+const auth = firebase.auth();
+const appId = window.__app_id || 'bfhs-mtss-tracker-v2';
+
+// Mapping Lucide icons from the window object (loaded via CDN)
+const { 
+  Users, TrendingUp, Plus, Search, ChevronRight, 
+  BarChart3, FileText, Upload, FileSpreadsheet,
+  ShieldCheck, Loader2, LogOut, UserPlus, AlertTriangle, Target, AlertCircle
+} = Lucide;
+
+// --- Constants ---
+const INTERVENTION_TYPES = [
+  'Pull for specific WIN', 'Check-in/Check-out', 'Work with Duffy during work time',
+  'Set priority list of work', 'Cell phone/device restriction', 'Positive peers',
+  'Rapport building', 'Explicit instruction/Outside classroom work', 'Paper copies',
+  'Chunking', 'Vocabulary review', 'Email content teacher for work',
+  'Before/After school', 'Encourage retakes', 'Utilize IEP, 504, EL supports',
+  'Attendance support', 'Currently evaluating IEP/504', 'Discussion on eligibility',
+  'Communication home', 'Academic Tier 3 Intervention', 'Monitor progress on next grade post',
+  'Study Hall grade checks (weekly)', 'Schedule change', 'Preferential seating',
+  'At-risk Duffy', 'Pass restriction', 'PBIS', 'Small group work',
+  'Behavior Referrals in Infinite Campus'
+].sort();
+
+const PRIORITY_LEVELS = [
+  { value: 4, label: 'Highest Priority', color: 'bg-red-600 text-white shadow-sm' },
+  { value: 3, label: 'High Priority', color: 'bg-orange-50 text-white shadow-sm' },
+  { value: 2, label: 'On Track', color: 'bg-emerald-500 text-white' },
+  { value: 1, label: 'Monitoring', color: 'bg-blue-500 text-white' },
+  { value: 0, label: 'Low / Exited', color: 'bg-slate-100 text-slate-500' }
+];
+
+const GRADES = ['9th', '10th', '11th', '12th'];
+const TIERS = ['Tier 1', 'Tier 2', 'Tier 3'];
+
+// --- Helper Functions ---
+const getStudentPriority = (student) => {
+  let systemLevel = 1;
+  if (student.status === 'Completed' || student.status === 'Inactive') systemLevel = 0;
+  else if (!student.interventions || student.interventions.length === 0) systemLevel = 4;
+  else if (student.interventions.some(i => i.status === 'No Progress')) systemLevel = 3;
+  else if (student.interventions.some(i => i.status === 'Improving')) systemLevel = 2;
+
+  const finalLevel = student.manualPriority !== null && student.manualPriority !== undefined ? student.manualPriority : systemLevel;
+  return PRIORITY_LEVELS.find(p => p.value === finalLevel) || PRIORITY_LEVELS[0];
+};
+
+// --- Main App Component ---
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [students, setStudents] = useState([]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await auth.signInWithCustomToken(__initial_auth_token);
+        } else {
+          await auth.signInAnonymously();
+        }
+      } catch (err) {
+        console.error("Auth initialization failed", err);
+      }
+    };
+
+    initAuth();
+    const unsubscribe = auth.onAuthStateChanged((u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    
+    // Path following Rule 1: /artifacts/{appId}/public/data/{collection}
+    const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
+    
+    const unsubscribe = studentsRef.onSnapshot(
+      (snapshot) => {
+        const studentData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setStudents(studentData);
+      },
+      (error) => console.error("Firestore read error:", error)
+    );
+    
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleLogout = () => auth.signOut();
+
+  const handleBatchUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !user) return;
+
+    setBatchLoading(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result;
+        const rows = text.split('\n').map(row => row.split(',').map(cell => cell.trim()));
+        const startIndex = (rows[0][0]?.toLowerCase().includes('name')) ? 1 : 0;
+        const newStudents = [];
+        let skippedCount = 0;
+
+        for (let i = startIndex; i < rows.length; i++) {
+          const [name, grade, tier] = rows[i];
+          if (!name) continue;
+          const exists = students.some(s => s.name.toLowerCase() === name.toLowerCase());
+          if (exists) { skippedCount++; continue; }
+
+          newStudents.push({
+            name,
+            grade: grade || '9th',
+            tier: tier || 'Tier 1',
+            status: 'Active',
+            identifiedAt: 'Batch Import',
+            referralReason: 'Imported via CSV batch upload.',
+            interventions: [],
+            manualPriority: null,
+            notes: "",
+            createdBy: user.uid,
+            createdAt: new Date().toISOString()
+          });
+        }
+
+        if (newStudents.length > 0) {
+          const batch = db.batch();
+          const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
+          
+          newStudents.forEach(s => {
+            const docRef = studentsRef.doc();
+            batch.set(docRef, s);
+          });
+          await batch.commit();
+        }
+        setBatchResult({ added: newStudents.length, skipped: skippedCount });
+      } catch (err) {
+        setBatchResult({ error: "Failed to process CSV file." });
+      } finally {
+        setBatchLoading(false);
+      }
+    };
+    reader.readAsText(file);
   };
+
+  const handleUpdateManualPriority = async (studentId, level) => {
+    if (!user) return;
+    const studentRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students').doc(studentId);
+    await studentRef.update({ 
+      manualPriority: level === "auto" ? null : parseInt(level), 
+      lastEditedBy: user.uid 
+    });
+  };
+
+  const handleAddStudent = async (e) => {
+    e.preventDefault();
+    if (!user) return;
+    const formData = new FormData(e.target);
+    const name = formData.get('name');
+    if (students.some(s => s.name.toLowerCase() === name.toLowerCase())) return;
+
+    const newStudent = {
+      name,
+      grade: formData.get('grade'),
+      tier: formData.get('tier'),
+      status: 'Active',
+      identifiedAt: 'Staff Addition',
+      referralReason: 'Case background pending documentation.',
+      interventions: [],
+      manualPriority: null,
+      notes: "",
+      createdBy: user.uid,
+      createdAt: new Date().toISOString()
+    };
+    
+    const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
+    await studentsRef.add(newStudent);
+    setShowAddStudentModal(false);
+  };
+
+  const sortedStudents = useMemo(() => {
+    return students
+      .filter(s => (s.name || '').toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => getStudentPriority(b).value - getStudentPriority(a).value || (a.name || '').localeCompare(b.name || ''));
+  }, [students, searchTerm]);
+
+  const selectedStudent = useMemo(() => students.find(s => s.id === selectedStudentId), [students, selectedStudentId]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-md w-full text-center">
+            <div className="inline-flex p-4 bg-indigo-600 rounded-3xl shadow-2xl mb-6"><ShieldCheck className="w-10 h-10 text-white" /></div>
+            <h1 className="text-3xl font-black text-slate-900">BFHS MTSS Portal</h1>
+            <p className="text-sm font-bold text-slate-400 mt-2">Connecting to secure database...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-10 font-sans">
+      <nav className="bg-white border-b border-slate-200 sticky top-0 z-40 px-6 h-20 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="bg-indigo-600 p-2.5 rounded-2xl text-white"><TrendingUp className="w-6 h-6" /></div>
+          <div>
+            <h1 className="text-xl font-black text-slate-900 leading-none">BFHS MTSS</h1>
+            <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Team Caseload</span>
+          </div>
+        </div>
+        <div className="flex bg-slate-100 p-1 rounded-xl">
+          <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest ${activeTab === 'dashboard' ? 'bg-white shadow-sm' : 'text-slate-400'}`}>Dashboard</button>
+          <button onClick={() => { setActiveTab('students'); setSelectedStudentId(null); }} className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest ${activeTab === 'students' ? 'bg-white shadow-sm' : 'text-slate-400'}`}>Caseload</button>
+        </div>
+        <button onClick={handleLogout} className="p-2.5 text-slate-400 hover:text-red-500 transition-colors"><LogOut className="w-5 h-5" /></button>
+      </nav>
+
+      <main className="max-w-7xl mx-auto p-6">
+        {activeTab === 'dashboard' && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-200">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total Students</p>
+              <p className="text-5xl font-black">{students.length}</p>
+            </div>
+            <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-200">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Tier 3 Cases</p>
+              <p className="text-5xl font-black text-red-600">{students.filter(s => s.tier === 'Tier 3').length}</p>
+            </div>
+            <div className="bg-indigo-600 p-8 rounded-[2rem] shadow-lg text-white">
+              <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-2">Active Interventions</p>
+              <p className="text-5xl font-black">{students.filter(s => s.status === 'Active').length}</p>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'students' && (
+          <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center gap-4">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Search caseload..." 
+                  className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowBatchModal(true)} className="px-4 py-2.5 bg-slate-100 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><FileSpreadsheet className="w-4 h-4"/> Batch</button>
+                <button onClick={() => setShowAddStudentModal(true)} className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-indigo-100"><Plus className="w-4 h-4"/> Add Student</button>
+              </div>
+            </div>
+            <table className="w-full">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-8 py-4 text-left text-[10px] font-black text-slate-400 uppercase">Priority</th>
+                  <th className="px-8 py-4 text-left text-[10px] font-black text-slate-400 uppercase">Name</th>
+                  <th className="px-8 py-4 text-left text-[10px] font-black text-slate-400 uppercase">Tier</th>
+                  <th className="px-8 py-4"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedStudents.map(s => {
+                  const p = getStudentPriority(s);
+                  return (
+                    <tr key={s.id} onClick={() => { setSelectedStudentId(s.id); setActiveTab('details'); }} className="hover:bg-slate-50 cursor-pointer">
+                      <td className="px-8 py-5"><span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase ${p.color}`}>{p.label}</span></td>
+                      <td className="px-8 py-5 font-bold">{s.name}</td>
+                      <td className="px-8 py-5 text-sm text-slate-500">{s.tier}</td>
+                      <td className="px-8 py-5 text-right"><ChevronRight className="w-4 h-4 text-slate-300 ml-auto" /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === 'details' && selectedStudent && (
+          <div className="space-y-6">
+            <button onClick={() => setActiveTab('students')} className="text-[10px] font-black uppercase text-slate-400 hover:text-indigo-600">← Back to Caseload</button>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+                <h2 className="text-4xl font-black mb-1">{selectedStudent.name}</h2>
+                <p className="text-xs font-black text-indigo-500 uppercase tracking-widest mb-8">{selectedStudent.grade} • {selectedStudent.tier}</p>
+                <div className="p-5 bg-slate-50 rounded-3xl border border-slate-100">
+                  <label className="text-[10px] font-black text-slate-400 uppercase mb-3 block">Priority Override</label>
+                  <select 
+                    className="w-full p-2.5 bg-white border border-slate-200 rounded-2xl text-xs font-bold outline-none"
+                    value={selectedStudent.manualPriority === null ? 'auto' : selectedStudent.manualPriority}
+                    onChange={(e) => handleUpdateManualPriority(selectedStudent.id, e.target.value)}
+                  >
+                    <option value="auto">System Suggested</option>
+                    {PRIORITY_LEVELS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="lg:col-span-2 space-y-6">
+                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase mb-4 flex items-center gap-2"><FileText className="w-4 h-4"/> Case Background</h3>
+                  <p className="text-sm text-slate-600 italic">"{selectedStudent.referralReason}"</p>
+                </div>
+                <div className="bg-white rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="px-8 py-4 bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b border-slate-200">Collaborative Meeting Notes</div>
+                  <textarea 
+                    className="w-full p-8 text-sm outline-none min-h-[300px]" 
+                    placeholder="Type details from intervention meetings here..."
+                    value={selectedStudent.notes || ''}
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      const studentRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students').doc(selectedStudent.id);
+                      await studentRef.update({ notes: val });
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showBatchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-[2.5rem] p-8 shadow-2xl max-w-md w-full">
+            <h3 className="text-2xl font-black mb-2 flex items-center gap-2"><Upload className="w-6 h-6 text-indigo-600" /> Batch Upload</h3>
+            <p className="text-[10px] font-black text-slate-400 uppercase mb-6">Import students from CSV (Name, Grade, Tier)</p>
+            {batchResult ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-emerald-50 text-emerald-700 rounded-2xl font-bold text-xs">Added: {batchResult.added} | Skipped: {batchResult.skipped}</div>
+                <button onClick={() => { setShowBatchModal(false); setBatchResult(null); }} className="w-full py-3 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Close</button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div onClick={() => fileInputRef.current.click()} className="border-2 border-dashed border-slate-200 rounded-3xl p-10 text-center cursor-pointer hover:bg-indigo-50">
+                  <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleBatchUpload} disabled={batchLoading} />
+                  {batchLoading ? <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500" /> : <FileSpreadsheet className="w-8 h-8 text-slate-300 mx-auto" />}
+                  <p className="text-sm font-bold text-slate-500 mt-4">{batchLoading ? 'Uploading...' : 'Click to select CSV'}</p>
+                </div>
+                <button onClick={() => setShowBatchModal(false)} className="w-full py-3 text-[10px] font-black uppercase text-slate-400">Cancel</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showAddStudentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-[2.5rem] p-8 shadow-2xl max-w-md w-full">
+            <h3 className="text-2xl font-black mb-6">New Student</h3>
+            <form onSubmit={handleAddStudent} className="space-y-4">
+              <input required name="name" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none" placeholder="Student Name" />
+              <div className="grid grid-cols-2 gap-4">
+                <select name="grade" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                  {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+                <select name="tier" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                  {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-4 pt-4">
+                <button type="button" onClick={() => setShowAddStudentModal(false)} className="flex-1 text-[10px] font-black uppercase text-slate-400">Cancel</button>
+                <button type="submit" className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-indigo-100">Enroll</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
   // Initialize Firebase
   const app = initializeApp(firebaseConfig);
