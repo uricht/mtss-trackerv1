@@ -59,6 +59,8 @@
         const GRADES = ['9th', '10th', '11th', '12th'];
         const TIERS = ['Tier 1', 'Tier 2', 'Tier 3'];
         const STATUSES = ['Active', 'Monitoring', 'Exited', 'Referral'];
+        const LOG_TYPES = ['Academic', 'Behavior', 'Attendance', 'SEL', 'MTSS Meeting'];
+        const STAFF = ['C. Smith', 'M. Jones', 'R. Miller', 'A. Johnson', 'S. Davis', 'Unassigned'];
 
         function App() {
             const [user, setUser] = useState(null);
@@ -69,6 +71,8 @@
             const [showAddModal, setShowAddModal] = useState(false);
             const [selectedStudent, setSelectedStudent] = useState(null);
             const [newLog, setNewLog] = useState('');
+            const [newLogType, setNewLogType] = useState('Academic');
+            const [assignedStaff, setAssignedStaff] = useState('Unassigned');
             const [isSeeding, setIsSeeding] = useState(false);
 
             useEffect(() => {
@@ -104,6 +108,7 @@
                     name: formData.get('name'),
                     grade: formData.get('grade'),
                     tier: formData.get('tier'),
+                    assignedStaff: 'Unassigned',
                     status: 'Active',
                     logs: [],
                     createdAt: serverTimestamp(),
@@ -123,15 +128,21 @@
                         const name = `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
                         const grade = GRADES[Math.floor(Math.random() * GRADES.length)];
                         const tier = Math.random() > 0.85 ? 'Tier 3' : (Math.random() > 0.6 ? 'Tier 2' : 'Tier 1');
-                        const status = 'Active';
+                        const staff = STAFF[Math.floor(Math.random() * STAFF.length)];
                         
                         const newDocRef = doc(collection(db, 'students'));
                         batch.set(newDocRef, {
                             name,
                             grade,
                             tier,
-                            status,
-                            logs: [{ text: "Automated profile generation. MTSS monitoring initialized.", date: new Date().toISOString(), author: "System" }],
+                            assignedStaff: staff,
+                            status: 'Active',
+                            logs: [{ 
+                                text: "Automated profile generation. MTSS monitoring initialized.", 
+                                date: new Date().toISOString(), 
+                                author: "System",
+                                type: 'Academic' 
+                            }],
                             createdAt: serverTimestamp()
                         });
                     }
@@ -150,7 +161,8 @@
                     {
                         text: newLog,
                         date: new Date().toISOString(),
-                        author: 'Staff'
+                        author: 'Staff Member',
+                        type: newLogType
                     },
                     ...(selectedStudent.logs || [])
                 ];
@@ -271,7 +283,7 @@
                                                 <tr>
                                                     <th className="px-8 py-5 text-left">Student</th>
                                                     <th className="px-8 py-5 text-left">Grade</th>
-                                                    <th className="px-8 py-5 text-left">Tier</th>
+                                                    <th className="px-8 py-5 text-left">Lead / Tier</th>
                                                     <th className="px-8 py-5 text-right">Action</th>
                                                 </tr>
                                             </thead>
@@ -288,14 +300,17 @@
                                                         </td>
                                                         <td className="px-8 py-6 text-sm font-semibold text-slate-500">{s.grade}</td>
                                                         <td className="px-8 py-6">
-                                                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                                                                s.tier === 'Tier 3' ? 'bg-red-50 text-red-600' : 
-                                                                s.tier === 'Tier 2' ? 'bg-orange-50 text-orange-600' : 'bg-indigo-50 text-indigo-600'
-                                                            }`}>{s.tier}</span>
+                                                            <div className="flex flex-col gap-1">
+                                                                <span className="text-[11px] font-bold text-slate-400">{s.assignedStaff || 'Unassigned'}</span>
+                                                                <span className={`w-fit px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                                                    s.tier === 'Tier 3' ? 'bg-red-50 text-red-600' : 
+                                                                    s.tier === 'Tier 2' ? 'bg-orange-50 text-orange-600' : 'bg-indigo-50 text-indigo-600'
+                                                                }`}>{s.tier}</span>
+                                                            </div>
                                                         </td>
                                                         <td className="px-8 py-6 text-right">
                                                             <div className="text-slate-300 group-hover:text-indigo-600 transition-colors inline-flex items-center gap-2">
-                                                                <span className="text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Details</span>
+                                                                <span className="text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Open Record</span>
                                                                 <Icon name="chevron-right" />
                                                             </div>
                                                         </td>
@@ -323,13 +338,24 @@
                                     <h3 className="text-2xl font-black text-slate-900 tracking-tight">New Enrollment</h3>
                                 </header>
                                 <form onSubmit={handleAddStudent} className="space-y-5">
-                                    <input name="name" required placeholder="Full Name" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none" />
-                                    <select name="grade" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
-                                        {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
-                                    </select>
-                                    <select name="tier" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
-                                        {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
-                                    </select>
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Full Name</label>
+                                        <input name="name" required placeholder="Student Name" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Grade</label>
+                                            <select name="grade" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                                                {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Initial Tier</label>
+                                            <select name="tier" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                                                {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
                                     <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl shadow-indigo-100">Add Student</button>
                                     <button type="button" onClick={() => setShowAddModal(false)} className="w-full font-black text-[10px] uppercase tracking-widest text-slate-400 py-2">Cancel</button>
                                 </form>
@@ -337,7 +363,7 @@
                         </div>
                     )}
 
-                    {/* Student Detail View */}
+                    {/* Student Detail View Sidebar */}
                     {selectedStudent && (
                         <div className="fixed inset-0 z-[110] flex justify-end">
                             <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedStudent(null)}></div>
@@ -348,29 +374,39 @@
                                             <h2 className="text-2xl font-black text-slate-900 tracking-tight">{selectedStudent.name}</h2>
                                             <span className="bg-slate-100 px-2 py-0.5 rounded text-[10px] font-black text-slate-500">{selectedStudent.grade}</span>
                                         </div>
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Intervention History</p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Case Management Profile</p>
                                     </div>
                                     <button onClick={() => setSelectedStudent(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><Icon name="x" /></button>
                                 </header>
 
-                                <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8">
-                                    <div className="grid grid-cols-2 gap-4">
+                                <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-10">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                         <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Level</label>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">MTSS Tier</label>
                                             <select 
                                                 value={selectedStudent.tier}
                                                 onChange={(e) => updateStudentField(selectedStudent.id, 'tier', e.target.value)}
-                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-sm outline-none"
+                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-[13px] outline-none shadow-sm"
                                             >
                                                 {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
                                             </select>
                                         </div>
                                         <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Status</label>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Lead Staff</label>
+                                            <select 
+                                                value={selectedStudent.assignedStaff || 'Unassigned'}
+                                                onChange={(e) => updateStudentField(selectedStudent.id, 'assignedStaff', e.target.value)}
+                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-[13px] outline-none shadow-sm"
+                                            >
+                                                {STAFF.map(s => <option key={s} value={s}>{s}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Track Status</label>
                                             <select 
                                                 value={selectedStudent.status}
                                                 onChange={(e) => updateStudentField(selectedStudent.id, 'status', e.target.value)}
-                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-sm outline-none"
+                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-[13px] outline-none shadow-sm"
                                             >
                                                 {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                                             </select>
@@ -378,44 +414,87 @@
                                     </div>
 
                                     <section>
-                                        <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-3xl mb-8">
+                                        <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+                                            <Icon name="message-square" className="w-4 h-4" /> Intervention & Meeting Logs
+                                        </h3>
+                                        
+                                        <div className="bg-white border-2 border-slate-100 p-6 rounded-[2rem] mb-10 shadow-sm">
+                                            <div className="flex gap-4 mb-4">
+                                                <div className="flex-1">
+                                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Category</label>
+                                                    <select 
+                                                        value={newLogType}
+                                                        onChange={(e) => setNewLogType(e.target.value)}
+                                                        className="w-full bg-slate-50 border border-slate-100 p-3 rounded-xl font-bold text-[12px] outline-none"
+                                                    >
+                                                        {LOG_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div className="flex-1 flex flex-col justify-end">
+                                                    <div className={`p-3 rounded-xl text-center text-[10px] font-black uppercase tracking-widest transition-colors ${
+                                                        newLogType === 'MTSS Meeting' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-50 text-slate-400'
+                                                    }`}>
+                                                        {newLogType === 'MTSS Meeting' ? 'Meeting Mode ON' : 'Individual Log'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
                                             <textarea 
                                                 value={newLog}
                                                 onChange={(e) => setNewLog(e.target.value)}
-                                                placeholder="Add intervention log entry..."
-                                                className="w-full bg-transparent border-none resize-none outline-none font-medium text-sm text-slate-700 h-24"
+                                                placeholder={newLogType === 'MTSS Meeting' ? "Summarize team decisions, goals, and next steps..." : "Detail the intervention or behavioral event..."}
+                                                className="w-full bg-slate-50 p-4 rounded-2xl resize-none outline-none font-medium text-sm text-slate-700 h-32 placeholder:text-slate-300 border border-slate-100"
                                             />
-                                            <div className="flex justify-end pt-2">
+                                            <div className="flex justify-end pt-4">
                                                 <button 
                                                     onClick={handleAddLog}
                                                     disabled={!newLog.trim()}
-                                                    className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-100 disabled:opacity-50"
+                                                    className="bg-indigo-600 text-white px-8 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-indigo-100 disabled:opacity-50 transition-all active:scale-95"
                                                 >
                                                     Save Entry
                                                 </button>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-4">
+                                        <div className="space-y-6">
                                             {(selectedStudent.logs || []).map((log, idx) => (
-                                                <div key={idx} className="bg-white border border-slate-100 p-6 rounded-3xl shadow-sm relative overflow-hidden">
-                                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 opacity-20"></div>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{new Date(log.date).toLocaleDateString()}</span>
-                                                        <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded uppercase">{log.author}</span>
+                                                <div key={idx} className={`bg-white border border-slate-100 p-6 rounded-[2rem] shadow-sm relative overflow-hidden transition-all hover:border-slate-200 ${log.type === 'MTSS Meeting' ? 'ring-2 ring-indigo-500/10' : ''}`}>
+                                                    <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${
+                                                        log.type === 'MTSS Meeting' ? 'bg-indigo-600' : 
+                                                        log.type === 'Behavior' ? 'bg-orange-500' :
+                                                        log.type === 'Attendance' ? 'bg-red-500' :
+                                                        'bg-slate-300'
+                                                    }`}></div>
+                                                    
+                                                    <div className="flex justify-between items-start mb-4">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                                                {new Date(log.date).toLocaleDateString()}
+                                                            </span>
+                                                            <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-widest ${
+                                                                log.type === 'MTSS Meeting' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                                                            }`}>{log.type}</span>
+                                                        </div>
+                                                        <span className="text-[10px] font-bold text-slate-400 italic">Logged by {log.author}</span>
                                                     </div>
                                                     <p className="text-sm font-medium text-slate-700 leading-relaxed whitespace-pre-wrap">{log.text}</p>
                                                 </div>
                                             ))}
+                                            {(selectedStudent.logs || []).length === 0 && (
+                                                <div className="text-center py-16 bg-slate-50 rounded-[3rem] border-2 border-dashed border-slate-100">
+                                                    <Icon name="history" className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                                                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">No history recorded</p>
+                                                </div>
+                                            )}
                                         </div>
                                     </section>
                                 </div>
 
                                 <footer className="p-8 border-t border-slate-100 flex justify-between items-center bg-slate-50/50">
-                                    <button onClick={() => deleteStudent(selectedStudent.id)} className="text-[10px] font-black text-red-400 hover:text-red-600 uppercase tracking-widest flex items-center gap-2">
-                                        <Icon name="trash-2" className="w-4 h-4" /> Delete
+                                    <button onClick={() => deleteStudent(selectedStudent.id)} className="text-[10px] font-black text-red-400 hover:text-red-600 uppercase tracking-widest flex items-center gap-2 transition-colors">
+                                        <Icon name="trash-2" className="w-4 h-4" /> Delete Record
                                     </button>
-                                    <button onClick={() => setSelectedStudent(null)} className="px-8 py-3.5 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest">Close Profile</button>
+                                    <button onClick={() => setSelectedStudent(null)} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-slate-200 transition-all active:scale-95">Exit Profile</button>
                                 </footer>
                             </div>
                         </div>
