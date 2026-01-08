@@ -15,21 +15,33 @@
     <div id="root"></div>
 
     <!-- Your Firebase Config goes here -->
-   <script type="module">
-  const { useState, useEffect, useMemo, useRef } = React;
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  writeBatch,
+  query
+} from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signInAnonymously, 
+  signInWithCustomToken,
+  signOut 
+} from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+const { useState, useEffect, useMemo, useRef } = React;
 
 // --- Configuration ---
-// We use the global firebase object provided by the environment's script loads
 const firebaseConfig = JSON.parse(window.__firebase_config);
-
-// Initialize Firebase using the global 'firebase' object
-if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
-
-const db = firebase.firestore();
-const auth = firebase.auth();
-const appId = window.__app_id || 'bfhs-mtss-tracker-v2';
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'bfhs-mtss-tracker-v2';
 
 // Mapping Lucide icons from the window object (loaded via CDN)
 const { 
@@ -39,19 +51,6 @@ const {
 } = Lucide;
 
 // --- Constants ---
-const INTERVENTION_TYPES = [
-  'Pull for specific WIN', 'Check-in/Check-out', 'Work with Duffy during work time',
-  'Set priority list of work', 'Cell phone/device restriction', 'Positive peers',
-  'Rapport building', 'Explicit instruction/Outside classroom work', 'Paper copies',
-  'Chunking', 'Vocabulary review', 'Email content teacher for work',
-  'Before/After school', 'Encourage retakes', 'Utilize IEP, 504, EL supports',
-  'Attendance support', 'Currently evaluating IEP/504', 'Discussion on eligibility',
-  'Communication home', 'Academic Tier 3 Intervention', 'Monitor progress on next grade post',
-  'Study Hall grade checks (weekly)', 'Schedule change', 'Preferential seating',
-  'At-risk Duffy', 'Pass restriction', 'PBIS', 'Small group work',
-  'Behavior Referrals in Infinite Campus'
-].sort();
-
 const PRIORITY_LEVELS = [
   { value: 4, label: 'Highest Priority', color: 'bg-red-600 text-white shadow-sm' },
   { value: 3, label: 'High Priority', color: 'bg-orange-50 text-white shadow-sm' },
@@ -68,14 +67,12 @@ const getStudentPriority = (student) => {
   let systemLevel = 1;
   if (student.status === 'Completed' || student.status === 'Inactive') systemLevel = 0;
   else if (!student.interventions || student.interventions.length === 0) systemLevel = 4;
-  else if (student.interventions.some(i => i.status === 'No Progress')) systemLevel = 3;
-  else if (student.interventions.some(i => i.status === 'Improving')) systemLevel = 2;
+  else if (student.interventions?.some(i => i.status === 'No Progress')) systemLevel = 3;
+  else if (student.interventions?.some(i => i.status === 'Improving')) systemLevel = 2;
 
   const finalLevel = student.manualPriority !== null && student.manualPriority !== undefined ? student.manualPriority : systemLevel;
   return PRIORITY_LEVELS.find(p => p.value === finalLevel) || PRIORITY_LEVELS[0];
 };
-
-// --- Main App Component ---
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -91,13 +88,14 @@ export default function App() {
   const [batchResult, setBatchResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  // RULE 3: Auth Before Queries
   useEffect(() => {
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await auth.signInWithCustomToken(__initial_auth_token);
+          await signInWithCustomToken(auth, __initial_auth_token);
         } else {
-          await auth.signInAnonymously();
+          await signInAnonymously(auth);
         }
       } catch (err) {
         console.error("Auth initialization failed", err);
@@ -105,31 +103,33 @@ export default function App() {
     };
 
     initAuth();
-    const unsubscribe = auth.onAuthStateChanged((u) => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
+  // RULE 1 & 2: Data Fetching with strict paths and no complex queries
   useEffect(() => {
     if (!user) return;
     
-    // Path following Rule 1: /artifacts/{appId}/public/data/{collection}
-    const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
+    const studentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
     
-    const unsubscribe = studentsRef.onSnapshot(
+    const unsubscribe = onSnapshot(studentsRef, 
       (snapshot) => {
         const studentData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setStudents(studentData);
       },
-      (error) => console.error("Firestore read error:", error)
+      (error) => {
+        console.error("Firestore Error:", error);
+      }
     );
     
     return () => unsubscribe();
   }, [user]);
 
-  const handleLogout = () => auth.signOut();
+  const handleLogout = () => signOut(auth);
 
   const handleBatchUpload = async (e) => {
     const file = e.target.files[0];
@@ -167,12 +167,12 @@ export default function App() {
         }
 
         if (newStudents.length > 0) {
-          const batch = db.batch();
-          const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
+          const batch = writeBatch(db);
+          const studentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
           
           newStudents.forEach(s => {
-            const docRef = studentsRef.doc();
-            batch.set(docRef, s);
+            const newDocRef = doc(studentsRef);
+            batch.set(newDocRef, s);
           });
           await batch.commit();
         }
@@ -188,8 +188,8 @@ export default function App() {
 
   const handleUpdateManualPriority = async (studentId, level) => {
     if (!user) return;
-    const studentRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students').doc(studentId);
-    await studentRef.update({ 
+    const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', studentId);
+    await updateDoc(studentRef, { 
       manualPriority: level === "auto" ? null : parseInt(level), 
       lastEditedBy: user.uid 
     });
@@ -200,7 +200,7 @@ export default function App() {
     if (!user) return;
     const formData = new FormData(e.target);
     const name = formData.get('name');
-    if (students.some(s => s.name.toLowerCase() === name.toLowerCase())) return;
+    if (students.some(s => s.name?.toLowerCase() === name.toLowerCase())) return;
 
     const newStudent = {
       name,
@@ -216,8 +216,8 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
     
-    const studentsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students');
-    await studentsRef.add(newStudent);
+    const studentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'students');
+    await addDoc(studentsRef, newStudent);
     setShowAddStudentModal(false);
   };
 
@@ -360,8 +360,8 @@ export default function App() {
                     value={selectedStudent.notes || ''}
                     onChange={async (e) => {
                       const val = e.target.value;
-                      const studentRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('students').doc(selectedStudent.id);
-                      await studentRef.update({ notes: val });
+                      const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', selectedStudent.id);
+                      await updateDoc(studentRef, { notes: val });
                     }}
                   />
                 </div>
