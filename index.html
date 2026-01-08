@@ -14,22 +14,23 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
         body { font-family: 'Inter', sans-serif; }
-        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.2s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        // 1. IMPORT FIREBASE (Using CDN links for browser compatibility)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, serverTimestamp, query, orderBy, writeBatch } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
         import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // 2. YOUR FIREBASE CONFIGURATION
         const firebaseConfig = {
             apiKey: "AIzaSyAb1mpDnwp73TnIzgDCqe2ELrd-A7IWfhY",
             authDomain: "mtss-tracker-v1.firebaseapp.com",
@@ -40,12 +41,10 @@
             measurementId: "G-GDC3ZE7KE3"
         };
 
-        // Initialize Firebase services
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
 
-        // Icon Helper Component
         const Icon = ({ name, className = "w-5 h-5" }) => {
             const iconRef = useRef(null);
             useEffect(() => {
@@ -59,6 +58,7 @@
 
         const GRADES = ['9th', '10th', '11th', '12th'];
         const TIERS = ['Tier 1', 'Tier 2', 'Tier 3'];
+        const STATUSES = ['Active', 'Monitoring', 'Exited', 'Referral'];
 
         function App() {
             const [user, setUser] = useState(null);
@@ -67,49 +67,106 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [searchTerm, setSearchTerm] = useState('');
             const [showAddModal, setShowAddModal] = useState(false);
+            const [selectedStudent, setSelectedStudent] = useState(null);
+            const [newLog, setNewLog] = useState('');
+            const [isSeeding, setIsSeeding] = useState(false);
 
-            // Handle Authentication
             useEffect(() => {
                 const unsubscribe = onAuthStateChanged(auth, async (u) => {
-                    if (!u) {
-                        try {
-                            await signInAnonymously(auth);
-                        } catch (err) {
-                            console.error("Auth error:", err);
-                        }
-                    }
+                    if (!u) await signInAnonymously(auth);
                     setUser(u);
                     setLoading(false);
                 });
                 return () => unsubscribe();
             }, []);
 
-            // Subscribe to Data
             useEffect(() => {
                 if (!user) return;
                 const studentsRef = collection(db, 'students');
                 const unsubscribe = onSnapshot(studentsRef, (snapshot) => {
                     const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                     setStudents(data);
-                }, (err) => console.error("Firestore Error:", err));
+                });
                 return () => unsubscribe();
             }, [user]);
+
+            useEffect(() => {
+                if (selectedStudent) {
+                    const updated = students.find(s => s.id === selectedStudent.id);
+                    if (updated) setSelectedStudent(updated);
+                }
+            }, [students]);
 
             const handleAddStudent = async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
+                await addDoc(collection(db, 'students'), {
+                    name: formData.get('name'),
+                    grade: formData.get('grade'),
+                    tier: formData.get('tier'),
+                    status: 'Active',
+                    logs: [],
+                    createdAt: serverTimestamp(),
+                });
+                setShowAddModal(false);
+            };
+
+            const seedExampleData = async () => {
+                if (!confirm("Add 50 example students to the database?")) return;
+                setIsSeeding(true);
+                const firstNames = ["James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael", "Linda", "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica", "Thomas", "Sarah", "Charles", "Karen", "Christopher", "Nancy", "Matthew", "Margaret", "Anthony", "Lisa"];
+                const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson", "White", "Harris"];
+                
                 try {
-                    await addDoc(collection(db, 'students'), {
-                        name: formData.get('name'),
-                        grade: formData.get('grade'),
-                        tier: formData.get('tier'),
-                        status: 'Active',
-                        createdAt: serverTimestamp(),
-                        createdBy: user.uid
-                    });
-                    setShowAddModal(false);
+                    const batch = writeBatch(db);
+                    for (let i = 0; i < 50; i++) {
+                        const name = `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+                        const grade = GRADES[Math.floor(Math.random() * GRADES.length)];
+                        const tier = Math.random() > 0.85 ? 'Tier 3' : (Math.random() > 0.6 ? 'Tier 2' : 'Tier 1');
+                        const status = 'Active';
+                        
+                        const newDocRef = doc(collection(db, 'students'));
+                        batch.set(newDocRef, {
+                            name,
+                            grade,
+                            tier,
+                            status,
+                            logs: [{ text: "Automated profile generation. MTSS monitoring initialized.", date: new Date().toISOString(), author: "System" }],
+                            createdAt: serverTimestamp()
+                        });
+                    }
+                    await batch.commit();
                 } catch (err) {
-                    alert("Error saving student. Ensure Firestore is in Test Mode.");
+                    console.error("Seeding error:", err);
+                } finally {
+                    setIsSeeding(false);
+                }
+            };
+
+            const handleAddLog = async () => {
+                if (!newLog.trim() || !selectedStudent) return;
+                const studentRef = doc(db, 'students', selectedStudent.id);
+                const updatedLogs = [
+                    {
+                        text: newLog,
+                        date: new Date().toISOString(),
+                        author: 'Staff'
+                    },
+                    ...(selectedStudent.logs || [])
+                ];
+                await updateDoc(studentRef, { logs: updatedLogs });
+                setNewLog('');
+            };
+
+            const updateStudentField = async (id, field, value) => {
+                const studentRef = doc(db, 'students', id);
+                await updateDoc(studentRef, { [field]: value });
+            };
+
+            const deleteStudent = async (id) => {
+                if (confirm("Are you sure you want to delete this student record?")) {
+                    await deleteDoc(doc(db, 'students', id));
+                    setSelectedStudent(null);
                 }
             };
 
@@ -120,9 +177,9 @@
 
             if (loading) return (
                 <div className="h-screen flex items-center justify-center bg-white">
-                    <div className="text-center">
+                    <div className="text-center animate-pulse">
                         <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Accessing Portal</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">BFHS MTSS Syncing</p>
                     </div>
                 </div>
             );
@@ -139,43 +196,48 @@
                                 <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mt-1 block">Intervention Engine</span>
                             </div>
                         </div>
-
                         <div className="flex gap-1.5 bg-slate-100 p-1.5 rounded-2xl">
-                            <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'dashboard' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500'}`}>Dashboard</button>
-                            <button onClick={() => setActiveTab('students')} className={`px-5 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'students' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500'}`}>Caseload</button>
+                            <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'dashboard' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Dashboard</button>
+                            <button onClick={() => setActiveTab('students')} className={`px-5 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'students' ? 'bg-white shadow-md text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Caseload</button>
                         </div>
                     </nav>
 
                     <main className="max-w-7xl mx-auto w-full p-6 lg:p-10">
                         {activeTab === 'dashboard' ? (
                             <div className="space-y-8 animate-fade-in">
-                                <header>
-                                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">System Overview</h2>
-                                    <p className="text-slate-500 font-medium mt-1">Real-time intervention metrics for Bondurant-Farrar.</p>
+                                <header className="flex justify-between items-end">
+                                    <div>
+                                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">System Overview</h2>
+                                        <p className="text-slate-500 font-medium mt-1">Real-time intervention metrics.</p>
+                                    </div>
+                                    <button 
+                                        onClick={seedExampleData}
+                                        disabled={isSeeding}
+                                        className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-5 py-3 rounded-2xl uppercase tracking-widest hover:bg-indigo-100 disabled:opacity-50 transition-all active:scale-95 border border-indigo-100"
+                                    >
+                                        {isSeeding ? 'Populating...' : 'Seed Example Data (50)'}
+                                    </button>
                                 </header>
-                                
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                     <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
                                         <div className="flex justify-between items-start mb-4">
-                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Students</p>
+                                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Registry</p>
                                             <div className="text-indigo-600 bg-indigo-50 p-2 rounded-lg"><Icon name="users" /></div>
                                         </div>
                                         <p className="text-6xl font-black text-slate-900">{students.length}</p>
                                     </div>
-                                    
                                     <div className="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl shadow-indigo-200 text-white">
                                         <div className="flex justify-between items-start mb-4">
-                                            <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">Active Tier 3</p>
+                                            <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">High Intensity (T3)</p>
                                             <div className="text-white bg-indigo-500/50 p-2 rounded-lg"><Icon name="alert-circle" /></div>
                                         </div>
                                         <p className="text-6xl font-black">{students.filter(s => s.tier === 'Tier 3').length}</p>
                                     </div>
-
                                     <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">System Status</p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Health Status</p>
                                         <div className="flex items-center gap-2 text-emerald-600 font-bold text-sm">
                                             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                                            Live Connection
+                                            Data Synced
                                         </div>
                                     </div>
                                 </div>
@@ -190,7 +252,7 @@
                                             </div>
                                             <input 
                                                 type="text" 
-                                                placeholder="Search caseload..." 
+                                                placeholder="Search student name..." 
                                                 className="w-full bg-slate-50 border border-slate-100 py-3.5 pl-12 pr-4 rounded-2xl text-sm font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all"
                                                 onChange={(e) => setSearchTerm(e.target.value)}
                                             />
@@ -199,7 +261,7 @@
                                             onClick={() => setShowAddModal(true)} 
                                             className="bg-indigo-600 text-white px-8 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-indigo-200 flex items-center gap-2 hover:bg-indigo-700 active:scale-95 transition-all"
                                         >
-                                            <Icon name="plus" className="w-4 h-4" /> New Student
+                                            <Icon name="plus" className="w-4 h-4" /> Enroll Student
                                         </button>
                                     </div>
 
@@ -209,14 +271,21 @@
                                                 <tr>
                                                     <th className="px-8 py-5 text-left">Student</th>
                                                     <th className="px-8 py-5 text-left">Grade</th>
-                                                    <th className="px-8 py-5 text-left">Intervention</th>
-                                                    <th className="px-8 py-5 text-right">Status</th>
+                                                    <th className="px-8 py-5 text-left">Tier</th>
+                                                    <th className="px-8 py-5 text-right">Action</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
-                                                {filteredStudents.map(s => (
-                                                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                                                        <td className="px-8 py-6 font-bold text-slate-900">{s.name}</td>
+                                                {filteredStudents.length > 0 ? filteredStudents.map(s => (
+                                                    <tr 
+                                                        key={s.id} 
+                                                        onClick={() => setSelectedStudent(s)} 
+                                                        className="hover:bg-slate-50/80 transition-all cursor-pointer group active:bg-slate-100"
+                                                    >
+                                                        <td className="px-8 py-6">
+                                                            <p className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">{s.name}</p>
+                                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{s.status || 'Active'}</p>
+                                                        </td>
                                                         <td className="px-8 py-6 text-sm font-semibold text-slate-500">{s.grade}</td>
                                                         <td className="px-8 py-6">
                                                             <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
@@ -225,13 +294,19 @@
                                                             }`}>{s.tier}</span>
                                                         </td>
                                                         <td className="px-8 py-6 text-right">
-                                                            <div className="flex items-center justify-end gap-2 text-[10px] font-black text-emerald-600 uppercase tracking-widest">
-                                                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                                                                {s.status}
+                                                            <div className="text-slate-300 group-hover:text-indigo-600 transition-colors inline-flex items-center gap-2">
+                                                                <span className="text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Details</span>
+                                                                <Icon name="chevron-right" />
                                                             </div>
                                                         </td>
                                                     </tr>
-                                                ))}
+                                                )) : (
+                                                    <tr>
+                                                        <td colSpan="4" className="px-8 py-20 text-center text-slate-400 font-bold text-sm">
+                                                            No student records found.
+                                                        </td>
+                                                    </tr>
+                                                )}
                                             </tbody>
                                         </table>
                                     </div>
@@ -240,38 +315,108 @@
                         )}
                     </main>
 
+                    {/* Add Student Modal */}
                     {showAddModal && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-6 z-[60]">
+                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-6 z-[100]">
                             <div className="bg-white p-10 rounded-[3rem] max-w-md w-full shadow-2xl animate-fade-in">
                                 <header className="mb-8">
-                                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">Enroll Student</h3>
-                                    <p className="text-slate-400 text-sm font-medium mt-1">Add a record to the live registry.</p>
+                                    <h3 className="text-2xl font-black text-slate-900 tracking-tight">New Enrollment</h3>
                                 </header>
-                                
                                 <form onSubmit={handleAddStudent} className="space-y-5">
+                                    <input name="name" required placeholder="Full Name" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none" />
+                                    <select name="grade" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                                        {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                                    </select>
+                                    <select name="tier" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none">
+                                        {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                    <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl shadow-indigo-100">Add Student</button>
+                                    <button type="button" onClick={() => setShowAddModal(false)} className="w-full font-black text-[10px] uppercase tracking-widest text-slate-400 py-2">Cancel</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Student Detail View */}
+                    {selectedStudent && (
+                        <div className="fixed inset-0 z-[110] flex justify-end">
+                            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedStudent(null)}></div>
+                            <div className="relative bg-white w-full max-w-2xl h-full shadow-2xl animate-fade-in flex flex-col">
+                                <header className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
                                     <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Student Name</label>
-                                        <input name="name" required placeholder="Full Name" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all" />
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Grade</label>
-                                            <select name="grade" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none cursor-pointer">
-                                                {GRADES.map(g => <option key={g} value={g}>{g} Grade</option>)}
-                                            </select>
+                                        <div className="flex items-center gap-3 mb-1">
+                                            <h2 className="text-2xl font-black text-slate-900 tracking-tight">{selectedStudent.name}</h2>
+                                            <span className="bg-slate-100 px-2 py-0.5 rounded text-[10px] font-black text-slate-500">{selectedStudent.grade}</span>
                                         </div>
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Intervention</label>
-                                            <select name="tier" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none cursor-pointer">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Intervention History</p>
+                                    </div>
+                                    <button onClick={() => setSelectedStudent(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400"><Icon name="x" /></button>
+                                </header>
+
+                                <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Level</label>
+                                            <select 
+                                                value={selectedStudent.tier}
+                                                onChange={(e) => updateStudentField(selectedStudent.id, 'tier', e.target.value)}
+                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-sm outline-none"
+                                            >
                                                 {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
                                             </select>
                                         </div>
+                                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block">Status</label>
+                                            <select 
+                                                value={selectedStudent.status}
+                                                onChange={(e) => updateStudentField(selectedStudent.id, 'status', e.target.value)}
+                                                className="w-full bg-white border border-slate-200 p-3 rounded-xl font-bold text-sm outline-none"
+                                            >
+                                                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                                            </select>
+                                        </div>
                                     </div>
-                                    <div className="flex flex-col gap-3 pt-6">
-                                        <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-95">Complete Enrollment</button>
-                                        <button type="button" onClick={() => setShowAddModal(false)} className="w-full font-black text-[10px] uppercase tracking-widest text-slate-400 py-3 hover:text-slate-600">Dismiss</button>
-                                    </div>
-                                </form>
+
+                                    <section>
+                                        <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-3xl mb-8">
+                                            <textarea 
+                                                value={newLog}
+                                                onChange={(e) => setNewLog(e.target.value)}
+                                                placeholder="Add intervention log entry..."
+                                                className="w-full bg-transparent border-none resize-none outline-none font-medium text-sm text-slate-700 h-24"
+                                            />
+                                            <div className="flex justify-end pt-2">
+                                                <button 
+                                                    onClick={handleAddLog}
+                                                    disabled={!newLog.trim()}
+                                                    className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-indigo-100 disabled:opacity-50"
+                                                >
+                                                    Save Entry
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            {(selectedStudent.logs || []).map((log, idx) => (
+                                                <div key={idx} className="bg-white border border-slate-100 p-6 rounded-3xl shadow-sm relative overflow-hidden">
+                                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 opacity-20"></div>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{new Date(log.date).toLocaleDateString()}</span>
+                                                        <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded uppercase">{log.author}</span>
+                                                    </div>
+                                                    <p className="text-sm font-medium text-slate-700 leading-relaxed whitespace-pre-wrap">{log.text}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </section>
+                                </div>
+
+                                <footer className="p-8 border-t border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                    <button onClick={() => deleteStudent(selectedStudent.id)} className="text-[10px] font-black text-red-400 hover:text-red-600 uppercase tracking-widest flex items-center gap-2">
+                                        <Icon name="trash-2" className="w-4 h-4" /> Delete
+                                    </button>
+                                    <button onClick={() => setSelectedStudent(null)} className="px-8 py-3.5 bg-slate-900 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest">Close Profile</button>
+                                </footer>
                             </div>
                         </div>
                     )}
